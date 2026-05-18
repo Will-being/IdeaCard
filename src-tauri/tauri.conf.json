@@ -1,0 +1,53 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "IdeaCard",
+  "version": "0.1.0",
+  "identifier": "com.ideacard.app",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "devUrl": "http://127.0.0.1:1420",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "IdeaCard",
+        "url": "index.html?view=main",
+        "width": 980,
+        "height": 700,
+        "minWidth": 780,
+        "minHeight": 540,
+        "resizable": true,
+        "visible": false,
+        "decorations": true,
+        "transparent": false,
+        "center": true
+      },
+      {
+        "label": "quick",
+        "title": "Quick Capture",
+        "url": "index.html?view=quick",
+        "width": 480,
+        "height": 360,
+        "minWidth": 360,
+        "minHeight": 240,
+        "resizable": true,
+        "visible": false,
+        "decorations": false,
+        "transparent": true,
+        "shadow": false,
+        "center": true
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": ["icons/icon.ico"]
+  }
+}
