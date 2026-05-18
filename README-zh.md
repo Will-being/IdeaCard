@@ -115,4 +115,4 @@ npm run tauri:build
 
 ## 许可证
 
-项目当前包含 `LICENSE` 文件。正式公开发布前，建议在这里补充明确的许可证名称。
+MIT

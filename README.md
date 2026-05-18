@@ -1,4 +1,4 @@
-# IdeaCard
+﻿# IdeaCard
 
 > A lightweight tray-first desktop app for capturing ideas as Markdown cards.
 
@@ -115,4 +115,4 @@ Each idea card is saved as a standalone Markdown file in the selected storage di
 
 ## License
 
-This project currently includes a `LICENSE` file. Update this section with the exact license name before publishing the repository publicly.
+MIT
