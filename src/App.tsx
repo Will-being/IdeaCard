@@ -603,7 +603,6 @@ function QuickCapture({
     const cleanupFocus = cleanupSubscription(
       appWindow.onFocusChanged(({ payload: focused }) => {
         if (focused) {
-          resetToNewDraft();
           titleInputRef.current?.focus();
           void reloadIdeasRef.current();
         } else if (dragGuardRef.current) {
