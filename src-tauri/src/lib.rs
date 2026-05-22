@@ -494,6 +494,28 @@ fn open_quick_window(app: AppHandle) {
     open_window(&app, "quick");
 }
 
+#[tauri::command]
+fn open_url(_app: AppHandle, url: String) -> Result<(), String> {
+    let trimmed = url.trim();
+    if !(trimmed.starts_with("http://") || trimmed.starts_with("https://")) {
+        return Err("Only http and https URLs are allowed".to_string());
+    }
+    #[cfg(target_os = "windows")]
+    let result = std::process::Command::new("explorer")
+        .arg(trimmed)
+        .spawn();
+
+    #[cfg(target_os = "macos")]
+    let result = std::process::Command::new("open").arg(trimmed).spawn();
+
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let result = std::process::Command::new("xdg-open").arg(trimmed).spawn();
+
+    result
+        .map(|_| ())
+        .map_err(|error| format!("Failed to open url: {error}"))
+}
+
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
@@ -521,7 +543,8 @@ pub fn run() {
             delete_idea,
             hide_window,
             open_main_window,
-            open_quick_window
+            open_quick_window,
+            open_url
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

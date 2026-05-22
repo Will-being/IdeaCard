@@ -129,6 +129,295 @@ button {
   line-height: 1.65;
 }
 
+.markdown-editor-shell {
+  position: relative;
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+
+.markdown-editor-input {
+  overflow: auto;
+  outline: 0;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(77, 94, 80, 0.32) transparent;
+  white-space: normal;
+  word-break: break-word;
+}
+
+.markdown-editor-input[data-empty="true"]::before {
+  position: absolute;
+  inset-block-start: 8px;
+  inset-inline-start: 0;
+  content: attr(data-placeholder);
+  color: #a4aaa1;
+  pointer-events: none;
+}
+
+.idea-editor-body.markdown-editor-input[data-empty="true"]::before {
+  inset-block-start: 16px;
+  inset-inline-start: 18px;
+}
+
+.markdown-editor-input::after {
+  display: block;
+  min-height: 42px;
+  content: "";
+}
+
+.markdown-editor-input p,
+.markdown-editor-input blockquote,
+.markdown-editor-input pre,
+.markdown-editor-input ul,
+.markdown-editor-input ol,
+.markdown-editor-input table {
+  margin: 0 0 12px;
+}
+
+.markdown-editor-input h1,
+.markdown-editor-input h2,
+.markdown-editor-input h3,
+.markdown-editor-input h4,
+.markdown-editor-input h5,
+.markdown-editor-input h6 {
+  margin: 14px 0 8px;
+  color: #17201c;
+  line-height: 1.25;
+  letter-spacing: 0;
+}
+
+.markdown-editor-input h1 { font-size: 1.35em; }
+.markdown-editor-input h2 { font-size: 1.22em; }
+.markdown-editor-input h3 { font-size: 1.08em; }
+.markdown-editor-input h4,
+.markdown-editor-input h5,
+.markdown-editor-input h6 { font-size: 1em; }
+
+.markdown-editor-input ul,
+.markdown-editor-input ol {
+  padding-left: 24px;
+}
+
+.markdown-editor-input ul[data-md-type="task-list"] {
+  padding-left: 0;
+  list-style: none;
+}
+
+.markdown-editor-input ul[data-md-type="task-list"] li {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+}
+
+.markdown-editor-input ul[data-md-type="task-list"] input[type="checkbox"] {
+  flex: 0 0 auto;
+}
+
+.markdown-editor-input [data-md-task-text="true"] {
+  display: inline-block;
+  min-width: 1em;
+  outline: 0;
+}
+
+.markdown-editor-input li[data-md-task="checked"] [data-md-task-text="true"] {
+  color: #7a837a;
+  text-decoration: line-through;
+  text-decoration-thickness: 1.5px;
+  text-decoration-color: rgba(80, 91, 82, 0.64);
+}
+
+.markdown-editor-input li + li {
+  margin-top: 4px;
+}
+
+.markdown-editor-input blockquote,
+.markdown-render-comment {
+  position: relative;
+  padding: 10px 12px;
+  border-left: 3px solid rgba(91, 103, 96, 0.34);
+  border-radius: 8px;
+  background: rgba(89, 99, 92, 0.13);
+}
+
+.markdown-editor-input [data-md-block="true"] {
+  position: relative;
+}
+
+.markdown-editor-input [data-md-block="true"]:hover,
+.markdown-editor-input [data-md-block="true"]:focus-within {
+  outline: 1px solid rgba(49, 91, 67, 0.22);
+  outline-offset: 2px;
+}
+
+.markdown-render-comment:empty::after,
+.markdown-render-comment p:empty::after,
+.markdown-editor-input pre code:empty::after,
+.markdown-editor-input [data-placeholder]:empty::after {
+  color: transparent;
+  content: attr(data-placeholder);
+}
+
+.markdown-render-comment {
+  color: #313a34;
+  white-space: pre-wrap;
+}
+
+.markdown-render-comment::before {
+  display: block;
+  margin-bottom: 5px;
+  color: #687268;
+  content: "评论";
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.markdown-editor-input pre {
+  overflow-x: auto;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: rgba(31, 38, 35, 0.08);
+  font-family: Consolas, "Courier New", monospace;
+  font-size: 0.92em;
+}
+
+.markdown-editor-input code {
+  padding: 1px 4px;
+  border-radius: 5px;
+  background: rgba(31, 38, 35, 0.08);
+  font-family: Consolas, "Courier New", monospace;
+}
+
+.markdown-editor-input pre code {
+  padding: 0;
+  background: transparent;
+  white-space: pre-wrap;
+}
+
+.markdown-editor-input table {
+  width: 100%;
+  overflow: hidden;
+  border-collapse: collapse;
+  border-radius: 8px;
+}
+
+.markdown-editor-input th,
+.markdown-editor-input td {
+  min-width: 72px;
+  padding: 8px;
+  border: 1px solid rgba(59, 71, 61, 0.16);
+  text-align: left;
+  vertical-align: top;
+  white-space: pre-wrap;
+}
+
+.markdown-editor-input th {
+  background: rgba(49, 91, 67, 0.08);
+  font-weight: 700;
+}
+
+.markdown-block-toolbar {
+  position: absolute;
+  right: 6px;
+  bottom: 8px;
+  z-index: 6;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px;
+  border: 1px solid rgba(57, 68, 58, 0.16);
+  border-radius: 12px;
+  background: rgba(255, 253, 250, 0.96);
+  box-shadow: 0 12px 30px rgba(31, 38, 35, 0.16);
+}
+
+.markdown-block-tool {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 28px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 8px;
+  color: #943d36;
+  background: rgba(148, 61, 54, 0.08);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.markdown-block-tool:hover {
+  background: rgba(148, 61, 54, 0.14);
+}
+
+.markdown-editor-input a {
+  color: #245b8f;
+}
+
+.markdown-editor-input hr {
+  width: 100%;
+  margin: 14px 0;
+  border: 0;
+  border-top: 1px solid rgba(59, 71, 61, 0.2);
+}
+
+.markdown-insert-menu {
+  position: absolute;
+  top: 38px;
+  left: 0;
+  z-index: 5;
+  display: grid;
+  width: min(300px, calc(100vw - 64px));
+  max-height: min(252px, 54vh);
+  overflow-y: auto;
+  padding: 6px;
+  border: 1px solid rgba(57, 68, 58, 0.16);
+  border-radius: 14px;
+  background: #fffdfa;
+  box-shadow: 0 18px 42px rgba(31, 38, 35, 0.18);
+}
+
+.markdown-insert-option {
+  display: grid;
+  grid-template-columns: 26px minmax(0, 1fr);
+  align-items: center;
+  gap: 9px;
+  min-height: 44px;
+  padding: 5px 8px;
+  border: 0;
+  border-radius: 10px;
+  color: #354039;
+  background: transparent;
+  text-align: left;
+}
+
+.markdown-insert-option:hover,
+.markdown-insert-option.active {
+  background: rgba(49, 91, 67, 0.1);
+}
+
+.markdown-insert-option svg {
+  color: #4f6d59;
+}
+
+.markdown-insert-option strong,
+.markdown-insert-option small {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.markdown-insert-option strong {
+  font-size: 13px;
+  line-height: 1.25;
+}
+
+.markdown-insert-option small {
+  margin-top: 2px;
+  color: #7a837a;
+  font-size: 11px;
+  line-height: 1.2;
+}
+
 .quick-page-status {
   display: flex;
   align-items: center;
@@ -737,9 +1026,16 @@ textarea:focus-visible {
 }
 
 .idea-editor-header time {
-  display: block;
+  display: inline-block;
   margin-top: 6px;
   color: #858d84;
+  font-size: 12px;
+}
+
+.idea-editor-autosave {
+  display: inline-block;
+  margin-left: 10px;
+  color: #6c766d;
   font-size: 12px;
 }
 

@@ -2,19 +2,29 @@ import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { open } from "@tauri-apps/plugin-dialog";
 import {
-  Check,
+  Code2,
+  Eraser,
   FolderOpen,
   Grid2X2,
   GripHorizontal,
+  List,
+  ListChecks,
+  ListOrdered,
+  MessageSquare,
+  Minus,
   Plus,
+  Quote,
   Search,
   Settings,
+  Table2,
   Trash2,
   X,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
 import type {
+  ClipboardEvent as ReactClipboardEvent,
   Dispatch,
+  FormEvent as ReactFormEvent,
   KeyboardEvent as ReactKeyboardEvent,
   PointerEvent as ReactPointerEvent,
   SetStateAction,
@@ -41,6 +51,18 @@ type Draft = {
 
 type Section = "ideas" | "settings";
 type Unlisten = () => void;
+type MarkdownInsertOption = {
+  id: string;
+  label: string;
+  description: string;
+  icon: typeof MessageSquare;
+};
+type MarkdownBlockElement = HTMLElement & {
+  dataset: HTMLElement["dataset"] & {
+    mdBlock?: string;
+    mdType?: string;
+  };
+};
 
 const emptyDraft: Draft = {
   title: "",
@@ -50,6 +72,8 @@ const emptyDraft: Draft = {
 const initialMode = new URLSearchParams(window.location.search).get("view") === "main" ? "main" : "quick";
 const closeAnimationMs = 90;
 const cardNavigationKeys = new Set(["ArrowRight", "ArrowDown", "ArrowLeft", "ArrowUp"]);
+const commentCalloutMarker = "> [!comment]";
+const urlPattern = /(^|[\s(])((?:https?:\/\/|www\.)[^\s<>()]+[^\s<>().,;:!?])/g;
 const dateTimeFormatter = new Intl.DateTimeFormat("zh-CN", {
   month: "2-digit",
   day: "2-digit",
@@ -57,6 +81,56 @@ const dateTimeFormatter = new Intl.DateTimeFormat("zh-CN", {
   minute: "2-digit",
 });
 
+const visibleMarkdownInsertOptions: MarkdownInsertOption[] = [
+  {
+    id: "comment",
+    label: "评论",
+    description: "灰底评论块",
+    icon: MessageSquare,
+  },
+  {
+    id: "table",
+    label: "表格",
+    description: "三列表格",
+    icon: Table2,
+  },
+  {
+    id: "quote",
+    label: "引用",
+    description: "引用块",
+    icon: Quote,
+  },
+  {
+    id: "code",
+    label: "代码",
+    description: "代码块",
+    icon: Code2,
+  },
+  {
+    id: "task-list",
+    label: "待办",
+    description: "可勾选任务",
+    icon: ListChecks,
+  },
+  {
+    id: "unordered-list",
+    label: "列表",
+    description: "无序列表",
+    icon: List,
+  },
+  {
+    id: "ordered-list",
+    label: "编号",
+    description: "有序列表",
+    icon: ListOrdered,
+  },
+  {
+    id: "divider",
+    label: "分割线",
+    description: "水平分割线",
+    icon: Minus,
+  },
+];
 const formatDate = (value: string) => {
   const timestamp = Number(value);
   if (!Number.isFinite(timestamp) || timestamp <= 0) return "刚刚";
@@ -79,6 +153,7 @@ const formatEndTimeForName = (date: Date) => {
 const getPreview = (body: string) => {
   const text = body
     .replace(/```[\s\S]*?```/g, "")
+    .replace(/^>\s*\[!comment\]\s*$/gim, "评论:")
     .replace(/[#>*_`[\]()~-]/g, "")
     .split("\n")
     .flatMap((line) => {
@@ -108,6 +183,549 @@ const draftFromIdea = (idea: IdeaCard): Draft => ({
 const draftsMatch = (left: Draft, right: Draft) =>
   (left.id ?? "") === (right.id ?? "") && left.title === right.title && left.body === right.body;
 
+const escapeHtml = (value: string) =>
+  value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+
+const escapeAttribute = (value: string) => escapeHtml(value).replace(/'/g, "&#39;");
+
+const normalizeMarkdownLine = (value: string) => value.replace(/\u00a0/g, " ").trim();
+const normalizeMarkdownBlock = (value: string) =>
+  value
+    .replace(/\r\n/g, "\n")
+    .replace(/\u00a0/g, " ")
+    .replace(/[ \t]+\n/g, "\n")
+    .replace(/\n[ \t]+/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+
+const normalizeCodeBlock = (value: string) =>
+  value
+    .replace(/\r\n/g, "\n")
+    .replace(/\u00a0/g, " ")
+    .replace(/^\n+|\n+$/g, "");
+
+const isTableDivider = (line: string) =>
+  /^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)+\|?\s*$/.test(line);
+
+const isMarkdownBlockStart = (line: string) => {
+  const trimmed = line.trim();
+  return (
+    trimmed === "" ||
+    /^#{1,6}\s+/.test(trimmed) ||
+    /^```/.test(trimmed) ||
+    /^>\s*/.test(trimmed) ||
+    /^([-*+]\s+|\d+\.\s+)/.test(trimmed) ||
+    /^-\s+\[[ xX]\]\s+/.test(trimmed) ||
+    /^-{3,}$/.test(trimmed)
+  );
+};
+
+const splitTableRow = (line: string) => {
+  const content = line.trim().replace(/^\|/, "").replace(/\|$/, "");
+  const cells: string[] = [];
+  let current = "";
+
+  for (let index = 0; index < content.length; index += 1) {
+    const char = content[index];
+    const next = content[index + 1];
+    if (char === "\\" && next === "|") {
+      current += "|";
+      index += 1;
+      continue;
+    }
+    if (char === "|") {
+      cells.push(current.trim().replace(/<br\s*\/?>/gi, "\n"));
+      current = "";
+      continue;
+    }
+    current += char;
+  }
+
+  cells.push(current.trim().replace(/<br\s*\/?>/gi, "\n"));
+  return cells;
+};
+
+const renderInlineMarkdown = (value: string, preserveLineBreaks = false) => {
+  let html = escapeHtml(value).replace(/&lt;br\s*\/?&gt;/gi, "\n");
+  html = html.replace(/`([^`]+)`/g, "<code>$1</code>");
+  html = html.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
+  html = html.replace(/\*([^*]+)\*/g, "<em>$1</em>");
+  html = html.replace(/\[([^\]]+)]\((https?:\/\/[^)]+)\)/g, '<a data-md-link="true" href="$2">$1</a>');
+  html = html.replace(urlPattern, (_match, prefix: string, rawUrl: string) => {
+    const href = rawUrl.startsWith("www.") ? `https://${rawUrl}` : rawUrl;
+    return `${prefix}<a data-md-link="true" href="${escapeAttribute(href)}">${rawUrl}</a>`;
+  });
+  if (preserveLineBreaks) html = html.replace(/\n/g, "<br>");
+  return html;
+};
+
+const paragraphHtml = (text: string) =>
+  text.trim() ? `<p>${renderInlineMarkdown(text, true)}</p>` : "<p><br></p>";
+
+const markdownToHtml = (value: string) => {
+  if (!value.trim()) return "";
+
+  const lines = value.replace(/\r\n/g, "\n").split("\n");
+  const html: string[] = [];
+  let index = 0;
+
+  while (index < lines.length) {
+    const line = lines[index];
+    const trimmed = line.trim();
+
+    if (!trimmed) {
+      index += 1;
+      continue;
+    }
+
+    if (trimmed.startsWith("```")) {
+      const codeLines: string[] = [];
+      index += 1;
+      while (index < lines.length && !lines[index].trim().startsWith("```")) {
+        codeLines.push(lines[index]);
+        index += 1;
+      }
+      if (index < lines.length) index += 1;
+      html.push(`<pre data-md-block="true" data-md-type="code" data-placeholder="代码"><code>${escapeHtml(codeLines.join("\n"))}</code></pre>`);
+      continue;
+    }
+
+    if (trimmed.toLowerCase() === commentCalloutMarker) {
+      const commentLines: string[] = [];
+      index += 1;
+      while (index < lines.length && lines[index].startsWith(">")) {
+        commentLines.push(lines[index].replace(/^>\s?/, ""));
+        index += 1;
+      }
+      html.push(
+        `<div class="markdown-render-comment" data-md-block="true" data-md-type="comment" data-placeholder="写下你的评论">${paragraphHtml(commentLines.join("\n"))}</div>`,
+      );
+      continue;
+    }
+
+    const heading = trimmed.match(/^(#{1,6})\s+(.+)$/);
+    if (heading) {
+      const level = heading[1].length;
+      html.push(`<h${level}>${renderInlineMarkdown(heading[2])}</h${level}>`);
+      index += 1;
+      continue;
+    }
+
+    if (trimmed === "---") {
+      html.push("<hr>");
+      index += 1;
+      continue;
+    }
+
+    if (index + 1 < lines.length && line.includes("|") && isTableDivider(lines[index + 1])) {
+      const headerCells = splitTableRow(line);
+      const bodyRows: string[][] = [];
+      index += 2;
+      while (index < lines.length && lines[index].includes("|") && lines[index].trim()) {
+        bodyRows.push(splitTableRow(lines[index]));
+        index += 1;
+      }
+      html.push(
+        `<table data-md-block="true"><thead><tr>${headerCells.map((cell) => `<th>${renderInlineMarkdown(cell, true)}</th>`).join("")}</tr></thead><tbody>${bodyRows
+          .map((row) => `<tr>${row.map((cell) => `<td>${renderInlineMarkdown(cell, true)}</td>`).join("")}</tr>`)
+          .join("")}</tbody></table>`,
+      );
+      continue;
+    }
+
+    if (/^-\s+\[[ xX]\]\s+/.test(trimmed)) {
+      const items: string[] = [];
+      while (index < lines.length && /^-\s+\[[ xX]\]\s+/.test(lines[index].trim())) {
+        const checked = /^-\s+\[[xX]\]\s+/.test(lines[index].trim());
+        const text = lines[index].trim().replace(/^-\s+\[[ xX]\]\s+/, "");
+        items.push(`<li data-md-task="${checked ? "checked" : "open"}"><input data-md-control="true" contenteditable="false" type="checkbox" ${checked ? "checked" : ""} tabindex="-1"><span data-md-task-text="true">${renderInlineMarkdown(text, true)}</span></li>`);
+        index += 1;
+      }
+      html.push(`<ul data-md-block="true" data-md-type="task-list">${items.join("")}</ul>`);
+      continue;
+    }
+
+    if (/^[-*+]\s+/.test(trimmed)) {
+      const items: string[] = [];
+      while (index < lines.length && /^[-*+]\s+/.test(lines[index].trim())) {
+        items.push(`<li>${renderInlineMarkdown(lines[index].trim().replace(/^[-*+]\s+/, ""))}</li>`);
+        index += 1;
+      }
+      html.push(`<ul>${items.join("")}</ul>`);
+      continue;
+    }
+
+    if (/^\d+\.\s+/.test(trimmed)) {
+      const items: string[] = [];
+      while (index < lines.length && /^\d+\.\s+/.test(lines[index].trim())) {
+        items.push(`<li>${renderInlineMarkdown(lines[index].trim().replace(/^\d+\.\s+/, ""))}</li>`);
+        index += 1;
+      }
+      html.push(`<ol>${items.join("")}</ol>`);
+      continue;
+    }
+
+    if (trimmed.startsWith(">")) {
+      const quoteLines: string[] = [];
+      while (index < lines.length && lines[index].trim().startsWith(">")) {
+        quoteLines.push(lines[index].replace(/^>\s?/, ""));
+        index += 1;
+      }
+      html.push(`<blockquote>${paragraphHtml(quoteLines.join("\n"))}</blockquote>`);
+      continue;
+    }
+
+    const paragraphLines = [trimmed];
+    index += 1;
+    while (index < lines.length && !isMarkdownBlockStart(lines[index])) {
+      paragraphLines.push(lines[index].trim());
+      index += 1;
+    }
+    html.push(paragraphHtml(paragraphLines.join("\n")));
+  }
+
+  return html.join("");
+};
+
+const multilineElementTags = new Set(["p", "div"]);
+
+const serializeInlineNode = (
+  node: Node,
+  options: { preserveBlocks?: boolean; literalCode?: boolean } = {},
+): string => {
+  if (node.nodeType === Node.TEXT_NODE) return node.textContent ?? "";
+  if (!(node instanceof HTMLElement)) return "";
+  if (node.getAttribute("data-md-control")) return "";
+
+  const tagName = node.tagName.toLowerCase();
+  const content = serializeChildNodes(node, options);
+  switch (node.tagName.toLowerCase()) {
+    case "strong":
+    case "b":
+      return `**${content}**`;
+    case "em":
+    case "i":
+      return `*${content}*`;
+    case "code":
+      return options.literalCode ? content : `\`${content}\``;
+    case "a":
+      return `[${content}](${node.getAttribute("href") ?? ""})`;
+    case "br":
+      return "\n";
+    default:
+      if (options.preserveBlocks && multilineElementTags.has(tagName)) {
+        return `${content.replace(/\n+$/g, "")}\n`;
+      }
+      return content;
+  }
+};
+
+const serializeChildNodes = (
+  element: Element,
+  options: { preserveBlocks?: boolean; literalCode?: boolean } = {},
+) =>
+  Array.from(element.childNodes).reduce((result, child) => {
+    if (
+      options.preserveBlocks &&
+      child instanceof HTMLElement &&
+      multilineElementTags.has(child.tagName.toLowerCase()) &&
+      result &&
+      !result.endsWith("\n")
+    ) {
+      return `${result}\n${serializeInlineNode(child, options)}`;
+    }
+    return result + serializeInlineNode(child, options);
+  }, "");
+
+const serializeInlineElement = (element: Element) =>
+  normalizeMarkdownLine(serializeChildNodes(element));
+
+const serializeMultilineElement = (
+  element: Element,
+  options: { literalCode?: boolean } = {},
+) => normalizeMarkdownBlock(serializeChildNodes(element, { preserveBlocks: true, ...options }));
+
+const serializeCodeElement = (element: Element) =>
+  normalizeCodeBlock(serializeChildNodes(element, { preserveBlocks: true, literalCode: true }));
+
+const serializeTableCell = (element: Element) =>
+  serializeMultilineElement(element)
+    .replace(/\|/g, "\\|")
+    .replace(/\n/g, "<br>");
+
+const serializeEditableMarkdown = (root: HTMLElement) => {
+  const blocks: string[] = [];
+
+  Array.from(root.children).forEach((element) => {
+    const tag = element.tagName.toLowerCase();
+    const text = serializeInlineElement(element);
+
+    if (element.getAttribute("data-md-type") === "comment") {
+      const commentText = serializeMultilineElement(element);
+      if (!commentText) return;
+      blocks.push(`${commentCalloutMarker}\n${commentText.split("\n").map((line) => (line ? `> ${line}` : ">")).join("\n")}`);
+      return;
+    }
+
+    if (tag.match(/^h[1-6]$/)) {
+      blocks.push(`${"#".repeat(Number(tag[1]))} ${text}`);
+      return;
+    }
+
+    if (tag === "blockquote") {
+      const quoteText = serializeMultilineElement(element);
+      if (!quoteText) return;
+      blocks.push(quoteText.split("\n").map((line) => (line ? `> ${line}` : ">")).join("\n"));
+      return;
+    }
+
+    if (tag === "pre") {
+      const codeText = serializeCodeElement(element);
+      if (!codeText.trim()) return;
+      blocks.push(`\`\`\`\n${codeText}\n\`\`\``);
+      return;
+    }
+
+    if (tag === "ul" || tag === "ol") {
+      const taskList = element.getAttribute("data-md-type") === "task-list";
+      const items = Array.from(element.children)
+        .filter((child) => child.tagName.toLowerCase() === "li")
+        .map((child, index) => {
+          const taskTextElement = taskList
+            ? child.querySelector<HTMLElement>("[data-md-task-text='true']")
+            : null;
+          const itemText = serializeInlineElement(taskTextElement ?? child)
+            .replace(/^\s*/, "")
+            .replace(/^[-*+]\s+/, "")
+            .replace(/^\d+\.\s+/, "")
+            .replace(/^\[[ xX]\]\s+/, "");
+          if (!itemText) return "";
+          if (taskList) {
+            const checkbox = child.querySelector<HTMLInputElement>("input[type='checkbox']");
+            const checked = child.getAttribute("data-md-task") === "checked" || checkbox?.checked;
+            return `- [${checked ? "x" : " "}] ${itemText}`;
+          }
+          return tag === "ol" ? `${index + 1}. ${itemText}` : `- ${itemText}`;
+        })
+        .filter(Boolean);
+      if (!items.length) return;
+      blocks.push(items.join("\n"));
+      return;
+    }
+
+    if (tag === "table") {
+      const rows = Array.from(element.querySelectorAll("tr")).map((row) =>
+        Array.from(row.children).map((cell) => serializeTableCell(cell)),
+      );
+      const header = rows[0] ?? [];
+      const body = rows.slice(1);
+      const hasTableContent = rows.flat().some((cell) => cell.trim());
+      if (!hasTableContent) return;
+      blocks.push(
+        [`| ${header.join(" | ")} |`, `| ${header.map(() => "---").join(" | ")} |`, ...body.map((row) => `| ${row.join(" | ")} |`)].join("\n"),
+      );
+      return;
+    }
+
+    if (tag === "hr") {
+      blocks.push("---");
+      return;
+    }
+
+    if (text) {
+      blocks.push(text);
+    }
+  });
+
+  return blocks.join("\n\n");
+};
+
+const getCaretOffset = (root: HTMLElement) => {
+  const selection = window.getSelection();
+  if (!selection || selection.rangeCount === 0) return 0;
+
+  const range = selection.getRangeAt(0);
+  if (!root.contains(range.startContainer)) return root.textContent?.length ?? 0;
+
+  const beforeRange = range.cloneRange();
+  beforeRange.selectNodeContents(root);
+  beforeRange.setEnd(range.startContainer, range.startOffset);
+  return beforeRange.toString().length;
+};
+
+const setCaretOffset = (root: HTMLElement, offset: number) => {
+  const selection = window.getSelection();
+  if (!selection) return;
+
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  let remaining = offset;
+  let current = walker.nextNode();
+
+  while (current) {
+    const length = current.textContent?.length ?? 0;
+    if (remaining <= length) {
+      const range = document.createRange();
+      range.setStart(current, Math.max(0, remaining));
+      range.collapse(true);
+      selection.removeAllRanges();
+      selection.addRange(range);
+      return;
+    }
+    remaining -= length;
+    current = walker.nextNode();
+  }
+
+  const range = document.createRange();
+  range.selectNodeContents(root);
+  range.collapse(false);
+  selection.removeAllRanges();
+  selection.addRange(range);
+};
+
+const getClosestMarkdownBlock = (node: Node | null, root: HTMLElement | null) => {
+  if (!node || !root) return null;
+  const element = node.nodeType === Node.ELEMENT_NODE ? node as Element : node.parentElement;
+  const block = element?.closest<MarkdownBlockElement>("[data-md-block='true']");
+  return block && root.contains(block) ? block : null;
+};
+
+const editableTailTags = new Set(["blockquote", "hr", "ol", "pre", "table", "ul"]);
+
+const isPlainEditableParagraph = (element: Element | null) =>
+  element?.tagName.toLowerCase() === "p" && !element.getAttribute("data-md-block");
+
+const needsEditableTail = (editor: HTMLElement) => {
+  const last = editor.lastElementChild;
+  if (!last || !normalizeMarkdownLine(editor.textContent ?? "")) return false;
+  const tag = last.tagName.toLowerCase();
+  return last.getAttribute("data-md-block") === "true" || editableTailTags.has(tag);
+};
+
+const ensureEditableTail = (editor: HTMLElement) => {
+  if (!needsEditableTail(editor)) return null;
+  const last = editor.lastElementChild;
+  if (isPlainEditableParagraph(last) && last?.getAttribute("data-md-tail") === "true") return last as HTMLParagraphElement;
+
+  const tail = document.createElement("p");
+  tail.dataset.mdTail = "true";
+  tail.innerHTML = "<br>";
+  editor.appendChild(tail);
+  return tail;
+};
+
+const placeCaretInElement = (element: HTMLElement, collapseToEnd = false) => {
+  const selection = window.getSelection();
+  if (!selection) return;
+  const range = document.createRange();
+  range.selectNodeContents(element);
+  range.collapse(!collapseToEnd);
+  selection.removeAllRanges();
+  selection.addRange(range);
+};
+
+const placeCaretInListItem = (item: HTMLLIElement, collapseToEnd = false) => {
+  const selection = window.getSelection();
+  if (!selection) return;
+
+  const taskText = item.querySelector<HTMLElement>("[data-md-task-text='true']");
+  const range = document.createRange();
+
+  if (taskText) {
+    if (!taskText.childNodes.length) {
+      taskText.appendChild(document.createElement("br"));
+    }
+    range.selectNodeContents(taskText);
+    range.collapse(!collapseToEnd);
+  } else {
+    range.selectNodeContents(item);
+    range.collapse(!collapseToEnd);
+  }
+
+  selection.removeAllRanges();
+  selection.addRange(range);
+};
+
+const syncTaskCheckboxState = (checkbox: HTMLInputElement, checked: boolean) => {
+  checkbox.checked = checked;
+  checkbox.toggleAttribute("checked", checked);
+  const item = checkbox.closest<HTMLLIElement>("li");
+  if (item) {
+    item.dataset.mdTask = checked ? "checked" : "open";
+  }
+  return item;
+};
+
+const refocusListItem = (item: HTMLLIElement) => {
+  window.setTimeout(() => {
+    if (!item.isConnected) return;
+    placeCaretInListItem(item);
+  }, 0);
+};
+
+const getClosestListItem = (node: Node | null, root: HTMLElement | null) => {
+  if (!node || !root) return null;
+  const element = node.nodeType === Node.ELEMENT_NODE ? node as Element : node.parentElement;
+  const item = element?.closest<HTMLLIElement>("li");
+  return item && root.contains(item) ? item : null;
+};
+
+const getClosestList = (node: Node | null, root: HTMLElement | null) => {
+  const item = getClosestListItem(node, root);
+  const list = item?.parentElement;
+  return list && (list.tagName.toLowerCase() === "ul" || list.tagName.toLowerCase() === "ol") ? list : null;
+};
+
+const normalizeListItemText = (item: HTMLLIElement) =>
+  normalizeMarkdownLine(serializeInlineElement(item))
+    .replace(/^\s*/, "")
+    .replace(/^[-*+]\s+/, "")
+    .replace(/^\d+\.\s+/, "")
+    .replace(/^\[[ xX]\]\s+/, "");
+
+const removeListItemMarker = (item: HTMLLIElement, list: HTMLElement) => {
+  const paragraph = document.createElement("p");
+  paragraph.innerHTML = "<br>";
+
+  if (list.children.length <= 1) {
+    list.replaceWith(paragraph);
+    placeCaretInElement(paragraph);
+    return;
+  }
+
+  const followingItems: HTMLLIElement[] = [];
+  let sibling = item.nextElementSibling;
+  while (sibling) {
+    const nextSibling = sibling.nextElementSibling;
+    if (sibling instanceof HTMLLIElement) {
+      followingItems.push(sibling);
+    }
+    sibling = nextSibling;
+  }
+
+  item.remove();
+
+  if (!list.children.length) {
+    list.replaceWith(paragraph);
+  } else {
+    list.after(paragraph);
+  }
+
+  if (followingItems.length) {
+    const nextList = document.createElement(list.tagName.toLowerCase());
+    Array.from(list.attributes).forEach((attribute) => {
+      nextList.setAttribute(attribute.name, attribute.value);
+    });
+    followingItems.forEach((followingItem) => nextList.appendChild(followingItem));
+    paragraph.after(nextList);
+  }
+
+  placeCaretInElement(paragraph);
+};
+
 type AppState = {
   settings: AppSettings | null;
   ideas: IdeaCard[];
@@ -131,7 +749,7 @@ const initialAppState: AppState = {
   draft: emptyDraft,
   query: "",
   section: "ideas",
-  status: "准备记录",
+  status: "已同步",
 };
 
 function resolveStateAction<T>(value: SetStateAction<T>, current: T) {
@@ -197,6 +815,483 @@ function cleanupSubscription(subscription: Promise<Unlisten>, onError?: (error: 
     unlisten?.();
     unlisten = undefined;
   };
+}
+
+function MarkdownBodyEditor({
+  className,
+  placeholder,
+  value,
+  onChange,
+}: {
+  className: string;
+  placeholder?: string;
+  value: string;
+  onChange: (value: string) => void;
+}) {
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [activeIndex, setActiveIndex] = useState(0);
+  const [selectedBlock, setSelectedBlock] = useState<MarkdownBlockElement | null>(null);
+  const editorRef = useRef<HTMLDivElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+  const isComposingRef = useRef(false);
+  const editingRef = useRef(false);
+  const handledCheckboxMouseDownRef = useRef(false);
+  const valueRef = useRef(value);
+
+  const renderedHtml = useMemo(() => markdownToHtml(value), [value]);
+  const isEmpty = !value.trim();
+
+  useEffect(() => {
+    valueRef.current = value;
+  }, [value]);
+
+  useEffect(() => {
+    if (!editorRef.current) return;
+    if (editingRef.current && document.activeElement === editorRef.current) return;
+    const nextHtml = renderedHtml;
+    if (editorRef.current.innerHTML !== nextHtml) {
+      editorRef.current.innerHTML = nextHtml;
+    }
+    ensureEditableTail(editorRef.current);
+  }, [renderedHtml]);
+
+  useEffect(() => {
+    if (!menuOpen) return;
+    const activeButton = menuRef.current?.querySelector<HTMLButtonElement>(
+      `[data-option-index="${activeIndex}"]`,
+    );
+    activeButton?.scrollIntoView({ block: "nearest" });
+  }, [activeIndex, menuOpen]);
+
+  const updateSelectedBlock = useCallback(() => {
+    const selection = window.getSelection();
+    const anchorNode = selection?.anchorNode ?? document.activeElement;
+    setSelectedBlock(getClosestMarkdownBlock(anchorNode, editorRef.current));
+  }, []);
+
+  const keepCaretVisible = useCallback(() => {
+    const editor = editorRef.current;
+    const selection = window.getSelection();
+    if (!editor || !selection || selection.rangeCount === 0) return;
+
+    const range = selection.getRangeAt(0).cloneRange();
+    const rect = range.getBoundingClientRect();
+    const editorRect = editor.getBoundingClientRect();
+    if (!editorRect.width && !editorRect.height) return;
+
+    const margin = 24;
+    if (rect.bottom > editorRect.bottom - margin) {
+      editor.scrollTop += rect.bottom - editorRect.bottom + margin;
+    } else if (rect.top < editorRect.top + margin) {
+      editor.scrollTop = Math.max(0, editor.scrollTop - (editorRect.top + margin - rect.top));
+    }
+  }, []);
+
+  const scrollEditorToEnd = useCallback(() => {
+    const editor = editorRef.current;
+    if (!editor) return;
+    editor.scrollTop = editor.scrollHeight;
+  }, []);
+
+  const syncFromEditor = useCallback(() => {
+    if (!editorRef.current || isComposingRef.current) return;
+    const caretOffset = getCaretOffset(editorRef.current);
+    const nextValue = serializeEditableMarkdown(editorRef.current).replace(/\n{3,}/g, "\n\n").trimEnd();
+    if (nextValue !== value) {
+      editingRef.current = true;
+      valueRef.current = nextValue;
+      onChange(nextValue);
+      setCaretOffset(editorRef.current, caretOffset);
+    }
+    ensureEditableTail(editorRef.current);
+    keepCaretVisible();
+    updateSelectedBlock();
+  }, [keepCaretVisible, onChange, updateSelectedBlock, value]);
+
+  const insertListItemAfter = useCallback((item: HTMLLIElement) => {
+    const list = item.parentElement;
+    if (!list) return;
+    const nextItem = document.createElement("li");
+    if (list.getAttribute("data-md-type") === "task-list") {
+      nextItem.dataset.mdTask = "open";
+      nextItem.innerHTML = '<input data-md-control="true" contenteditable="false" type="checkbox" tabindex="-1" /><span data-md-task-text="true"><br></span>';
+    } else {
+      nextItem.innerHTML = "<br>";
+    }
+    item.after(nextItem);
+    placeCaretInListItem(nextItem);
+    syncFromEditor();
+    refocusListItem(nextItem);
+  }, [syncFromEditor]);
+
+  const deleteBlock = useCallback((block: MarkdownBlockElement | null = selectedBlock) => {
+    if (!block || !editorRef.current) return;
+    const nextFocus = document.createElement("p");
+    nextFocus.innerHTML = "<br>";
+    block.replaceWith(nextFocus);
+    setSelectedBlock(null);
+
+    const selection = window.getSelection();
+    const range = document.createRange();
+    range.selectNodeContents(nextFocus);
+    range.collapse(true);
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+    syncFromEditor();
+  }, [selectedBlock, syncFromEditor]);
+  const createInsertedHtml = useCallback((option: MarkdownInsertOption) => {
+    switch (option.id) {
+      case "comment":
+        return '<div class="markdown-render-comment" data-md-block="true" data-md-type="comment" data-placeholder="写下你的评论"><p><br></p></div>';
+      case "table":
+        return '<table data-md-block="true" data-md-type="table"><thead><tr><th>列 1</th><th>列 2</th><th>列 3</th></tr></thead><tbody><tr><td><br></td><td><br></td><td><br></td></tr></tbody></table>';
+      case "quote":
+        return '<blockquote data-placeholder="引用内容"><p><br></p></blockquote>';
+      case "code":
+        return '<pre data-md-block="true" data-md-type="code" data-placeholder="代码"><code><br></code></pre>';
+      case "task-list":
+        return '<ul data-md-block="true" data-md-type="task-list"><li data-md-task="open" data-placeholder="待办事项"><input data-md-control="true" contenteditable="false" type="checkbox" tabindex="-1" /><span data-md-task-text="true"><br></span></li></ul>';
+      case "unordered-list":
+        return '<ul><li data-placeholder="列表项"><br></li></ul>';
+      case "ordered-list":
+        return '<ol><li data-placeholder="列表项"><br></li></ol>';
+      case "divider":
+        return "<hr />";
+      default:
+        return "<p><br></p>";
+    }
+  }, []);
+  const insertOption = useCallback(
+    (option: MarkdownInsertOption) => {
+      const editor = editorRef.current;
+      const selection = window.getSelection();
+      if (!editor || !selection || selection.rangeCount === 0) return;
+
+      editor.focus();
+      const range = selection.getRangeAt(0);
+      range.deleteContents();
+
+      const template = document.createElement("template");
+      template.innerHTML = createInsertedHtml(option);
+      const fragment = template.content;
+      const lastNode = fragment.lastChild;
+      range.insertNode(fragment);
+
+      let listFocusTarget: HTMLLIElement | null = null;
+
+      if (lastNode) {
+        const insertedElement = lastNode instanceof HTMLElement ? lastNode : lastNode.parentElement;
+        const trailingParagraph = document.createElement("p");
+        trailingParagraph.dataset.mdTail = "true";
+        trailingParagraph.innerHTML = "<br>";
+        const focusSelectorByType: Record<string, string> = {
+          code: "code",
+          comment: "p",
+          "ordered-list": "li",
+          quote: "p",
+          table: "td",
+          "task-list": "li",
+          "unordered-list": "li",
+        };
+        const focusSelector = focusSelectorByType[option.id];
+        const focusTarget =
+          (focusSelector ? insertedElement?.querySelector<HTMLElement>(focusSelector) : null) ??
+          insertedElement ??
+          trailingParagraph;
+        lastNode.parentNode?.insertBefore(trailingParagraph, lastNode.nextSibling);
+        if (focusTarget instanceof HTMLLIElement) {
+          listFocusTarget = focusTarget;
+          placeCaretInListItem(focusTarget);
+        } else {
+          placeCaretInElement(focusTarget ?? trailingParagraph);
+        }
+      }
+
+      setMenuOpen(false);
+      setActiveIndex(0);
+      syncFromEditor();
+      window.setTimeout(() => {
+        if (listFocusTarget?.isConnected) {
+          placeCaretInListItem(listFocusTarget);
+        }
+        keepCaretVisible();
+        scrollEditorToEnd();
+      }, 0);
+    },
+    [createInsertedHtml, keepCaretVisible, scrollEditorToEnd, syncFromEditor],
+  );
+
+  const handleKeyDown = useCallback(
+    (event: ReactKeyboardEvent<HTMLDivElement>) => {
+      const editor = editorRef.current;
+      const selection = window.getSelection();
+      const activeList = getClosestList(selection?.anchorNode ?? null, editor);
+      const activeListItem = getClosestListItem(selection?.anchorNode ?? null, editor);
+
+      if ((event.key === "Backspace" || event.key === "Delete") && selectedBlock) {
+        const blockText = normalizeMarkdownLine(selectedBlock.textContent ?? "");
+        if (!blockText) {
+          event.preventDefault();
+          deleteBlock(selectedBlock);
+          return;
+        }
+      }
+
+      if (!menuOpen && (event.key === "Backspace" || event.key === "Delete") && activeList && activeListItem) {
+        if (!normalizeListItemText(activeListItem)) {
+          event.preventDefault();
+          removeListItemMarker(activeListItem, activeList);
+          syncFromEditor();
+          return;
+        }
+      }
+
+      if (!menuOpen && event.key === "Enter" && activeList && activeListItem) {
+        event.preventDefault();
+        if (!normalizeListItemText(activeListItem)) {
+          removeListItemMarker(activeListItem, activeList);
+          syncFromEditor();
+          return;
+        }
+        insertListItemAfter(activeListItem);
+        return;
+      }
+
+      if (!menuOpen && event.key === "Tab" && activeListItem) {
+        event.preventDefault();
+        return;
+      }
+
+      if (!menuOpen) {
+        if (event.key === "@" && !event.nativeEvent.isComposing) {
+          event.preventDefault();
+          setMenuOpen(true);
+          setActiveIndex(0);
+        }
+        return;
+      }
+
+      if (event.key === "Escape") {
+        event.preventDefault();
+        setMenuOpen(false);
+        return;
+      }
+
+      if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+        event.preventDefault();
+        const direction = event.key === "ArrowDown" ? 1 : -1;
+        setActiveIndex((current) => (current + direction + visibleMarkdownInsertOptions.length) % visibleMarkdownInsertOptions.length);
+        return;
+      }
+
+      if (event.key === "Enter" || event.key === "Tab") {
+        event.preventDefault();
+        insertOption(visibleMarkdownInsertOptions[activeIndex]);
+      }
+    },
+    [activeIndex, deleteBlock, insertListItemAfter, insertOption, menuOpen, selectedBlock, syncFromEditor],
+  );
+
+  const handlePaste = useCallback((event: ReactClipboardEvent<HTMLDivElement>) => {
+    const text = event.clipboardData.getData("text/plain");
+    if (!text) return;
+    event.preventDefault();
+    const selection = window.getSelection();
+    if (!selection || selection.rangeCount === 0) return;
+    const range = selection.getRangeAt(0);
+    range.deleteContents();
+    const node = document.createTextNode(text);
+    range.insertNode(node);
+    range.setStartAfter(node);
+    range.collapse(true);
+    selection.removeAllRanges();
+    selection.addRange(range);
+    syncFromEditor();
+  }, [syncFromEditor]);
+
+  const handleClick = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
+    const checkbox = (event.target as Element).closest<HTMLInputElement>("input[type='checkbox'][data-md-control='true']");
+    if (checkbox && editorRef.current?.contains(checkbox)) {
+      event.preventDefault();
+      event.stopPropagation();
+      if (handledCheckboxMouseDownRef.current) {
+        handledCheckboxMouseDownRef.current = false;
+        return;
+      }
+
+      const item = syncTaskCheckboxState(checkbox, !checkbox.checked);
+      if (item) {
+        placeCaretInListItem(item, true);
+      }
+      syncFromEditor();
+      updateSelectedBlock();
+      window.requestAnimationFrame(() => {
+        if (item?.isConnected) {
+          editorRef.current?.focus();
+          placeCaretInListItem(item, true);
+        }
+      });
+      return;
+    }
+
+    const link = (event.target as Element).closest<HTMLAnchorElement>("a[data-md-link='true']");
+    if (link && event.ctrlKey) {
+      event.preventDefault();
+      void invoke("open_url", { url: link.href });
+      return;
+    }
+    updateSelectedBlock();
+  }, [syncFromEditor, updateSelectedBlock]);
+
+  const handleFocus = useCallback(() => {
+    const editor = editorRef.current;
+    if (!editor) return;
+    if (!valueRef.current.trim() && !normalizeMarkdownLine(editor.textContent ?? "")) {
+      editor.innerHTML = "";
+      placeCaretInElement(editor);
+      return;
+    }
+    ensureEditableTail(editor);
+  }, []);
+
+  const handleMouseDown = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
+    const checkbox = (event.target as Element).closest<HTMLInputElement>("input[type='checkbox'][data-md-control='true']");
+    if (checkbox && editorRef.current?.contains(checkbox)) {
+      event.preventDefault();
+      event.stopPropagation();
+      handledCheckboxMouseDownRef.current = true;
+
+      const item = syncTaskCheckboxState(checkbox, !checkbox.checked);
+      if (item) {
+        editorRef.current.focus();
+        placeCaretInListItem(item, true);
+      }
+      syncFromEditor();
+      updateSelectedBlock();
+      window.requestAnimationFrame(() => {
+        if (item?.isConnected) {
+          editorRef.current?.focus();
+          placeCaretInListItem(item, true);
+        }
+      });
+      return;
+    }
+
+    if (event.target !== event.currentTarget) return;
+    const editor = editorRef.current;
+    if (!editor) return;
+    const tail = ensureEditableTail(editor);
+    if (!tail) return;
+    window.setTimeout(() => {
+      placeCaretInElement(tail);
+      updateSelectedBlock();
+    }, 0);
+  }, [syncFromEditor, updateSelectedBlock]);
+
+  const handleInput = (event: ReactFormEvent<HTMLDivElement>) => {
+    const editor = editorRef.current;
+    const inputType = event.nativeEvent instanceof InputEvent ? event.nativeEvent.inputType : "";
+    const selection = window.getSelection();
+    const activeListItem = getClosestListItem(selection?.anchorNode ?? null, editor);
+    const shouldRefocusEmptyListItem =
+      inputType.startsWith("delete") &&
+      activeListItem?.isConnected &&
+      !normalizeListItemText(activeListItem);
+
+    syncFromEditor();
+    if (shouldRefocusEmptyListItem) {
+      window.setTimeout(() => {
+        if (activeListItem.isConnected) {
+          editor?.focus();
+          placeCaretInListItem(activeListItem);
+        }
+      }, 0);
+    }
+    window.requestAnimationFrame(keepCaretVisible);
+  };
+
+  return (
+    <div className="markdown-editor-shell">
+      <div
+        aria-label={placeholder}
+        className={`${className} markdown-editor-input`}
+        contentEditable
+        data-empty={isEmpty ? "true" : "false"}
+        data-placeholder={placeholder}
+        onBlur={() =>
+          window.setTimeout(() => {
+            setMenuOpen(false);
+            editingRef.current = false;
+            if (editorRef.current) {
+              editorRef.current.innerHTML = markdownToHtml(valueRef.current);
+            }
+          }, 120)
+        }
+        onCompositionEnd={() => {
+          isComposingRef.current = false;
+          syncFromEditor();
+        }}
+        onCompositionStart={() => {
+          isComposingRef.current = true;
+        }}
+        onFocus={handleFocus}
+        onClick={handleClick}
+        onInput={handleInput}
+        onKeyDown={handleKeyDown}
+        onMouseDown={handleMouseDown}
+        onKeyUp={updateSelectedBlock}
+        onMouseUp={updateSelectedBlock}
+        onPaste={handlePaste}
+        ref={editorRef}
+        role="textbox"
+        suppressContentEditableWarning
+        tabIndex={0}
+      />
+      {selectedBlock && (
+        <div className="markdown-block-toolbar" contentEditable={false}>
+          <button
+            className="markdown-block-tool"
+            onMouseDown={(event) => {
+              event.preventDefault();
+              deleteBlock();
+            }}
+            title="删除内容块"
+            type="button"
+          >
+            <Eraser size={14} />
+            删除
+          </button>
+        </div>
+      )}
+      {menuOpen && (
+        <div className="markdown-insert-menu" ref={menuRef} role="listbox" aria-label="插入 Markdown 内容">
+          {visibleMarkdownInsertOptions.map((option, index) => {
+            const Icon = option.icon;
+            return (
+              <button
+                className={index === activeIndex ? "markdown-insert-option active" : "markdown-insert-option"}
+                data-option-index={index}
+                key={option.id}
+                onMouseDown={(event) => {
+                  event.preventDefault();
+                  insertOption(option);
+                }}
+                role="option"
+                aria-selected={index === activeIndex}
+                type="button"
+              >
+                <Icon size={16} />
+                <span>
+                  <strong>{option.label}</strong>
+                  <small>{option.description}</small>
+                </span>
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
 }
 
 function App() {
@@ -302,13 +1397,6 @@ function App() {
     setStatus("已删除");
   };
 
-  const saveSelectedDraft = async () => {
-    const saved = await saveDraft(draft);
-    if (saved) {
-      setDraft(draftFromIdea(saved));
-    }
-  };
-
   const chooseFolder = async () => {
     const selected = await open({
       directory: true,
@@ -389,7 +1477,7 @@ function App() {
             <header className="main-header">
               <div>
                 <h1>灵感卡片</h1>
-                <p>所有 Idea 卡片会从你设置的目录读取。</p>
+                <p>把快速记录中的想法整理成可编辑的 Markdown 卡片。</p>
               </div>
               <button className="primary-button" onClick={() => invoke("open_quick_window")} type="button">
                 <Plus size={16} />
@@ -429,7 +1517,7 @@ function App() {
                 onClose={() => setDraft(emptyDraft)}
                 onDelete={() => deleteIdea(selectedIdea.id).catch((error) => setStatus(String(error)))}
                 onDraftChange={setDraft}
-                onSave={() => saveSelectedDraft().catch((error) => setStatus(String(error)))}
+                onSaveDraft={saveDraft}
               />
             )}
           </>
@@ -661,14 +1749,14 @@ function QuickCapture({
             }))
           }
         />
-        <textarea
+        <MarkdownBodyEditor
           className="quick-body-input"
-          placeholder="直接写 Markdown..."
+          placeholder=""
           value={draft.body}
-          onChange={(event) =>
+          onChange={(body) =>
             setDraft((current) => ({
               ...current,
-              body: event.target.value,
+              body,
             }))
           }
         />
@@ -691,26 +1779,90 @@ function IdeaEditorDialog({
   onClose,
   onDelete,
   onDraftChange,
-  onSave,
+  onSaveDraft,
 }: {
   draft: Draft;
   idea: IdeaCard;
   onClose: () => void;
   onDelete: () => void;
   onDraftChange: Dispatch<SetStateAction<Draft>>;
-  onSave: () => void;
+  onSaveDraft: (candidate: Draft) => Promise<IdeaCard | null>;
 }) {
+  const [autoSaveStatus, setAutoSaveStatus] = useState("已同步");
+  const latestDraftRef = useRef(draft);
+  const lastSavedDraftRef = useRef(draft);
+  const saveDraftRef = useRef(onSaveDraft);
+  const saveInFlightRef = useRef(false);
+
+  useEffect(() => {
+    latestDraftRef.current = draft;
+  }, [draft]);
+
+  useEffect(() => {
+    saveDraftRef.current = onSaveDraft;
+  }, [onSaveDraft]);
+
+  useEffect(() => {
+    const current = latestDraftRef.current;
+    if (!hasDraftContent(current) || draftsMatch(current, lastSavedDraftRef.current)) {
+      setAutoSaveStatus("已同步");
+      return;
+    }
+
+    setAutoSaveStatus("保存中...");
+    const timeoutId = window.setTimeout(() => {
+      const candidate = latestDraftRef.current;
+      saveInFlightRef.current = true;
+      void saveDraftRef.current(candidate).then((saved) => {
+        saveInFlightRef.current = false;
+        if (!saved) {
+          setAutoSaveStatus("保存失败");
+          return;
+        }
+        const savedDraft = draftFromIdea(saved);
+        lastSavedDraftRef.current = savedDraft;
+        latestDraftRef.current = savedDraft;
+        onDraftChange(savedDraft);
+        setAutoSaveStatus("已自动保存");
+      });
+    }, 650);
+
+    return () => window.clearTimeout(timeoutId);
+  }, [draft, onDraftChange]);
+
+  const closeAfterSaving = useCallback(() => {
+    const candidate = latestDraftRef.current;
+    if (
+      !saveInFlightRef.current &&
+      hasDraftContent(candidate) &&
+      !draftsMatch(candidate, lastSavedDraftRef.current)
+    ) {
+      void saveDraftRef.current(candidate).then((saved) => {
+        if (saved) {
+          const savedDraft = draftFromIdea(saved);
+          lastSavedDraftRef.current = savedDraft;
+          latestDraftRef.current = savedDraft;
+          onDraftChange(savedDraft);
+        }
+        onClose();
+      });
+      return;
+    }
+
+    onClose();
+  }, [onClose, onDraftChange]);
+
   useEffect(() => {
     const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === "Escape") onClose();
+      if (event.key === "Escape") closeAfterSaving();
     };
 
     window.addEventListener("keydown", closeOnEscape);
     return () => window.removeEventListener("keydown", closeOnEscape);
-  }, [onClose]);
+  }, [closeAfterSaving]);
 
   return (
-    <div className="editor-backdrop" onMouseDown={onClose} role="presentation">
+    <div className="editor-backdrop" onMouseDown={closeAfterSaving} role="presentation">
       <section
         aria-label="灵感卡片编辑"
         aria-modal="true"
@@ -731,19 +1883,20 @@ function IdeaEditorDialog({
               }
             />
             <time>{formatDate(idea.updated_at)}</time>
+            <span className="idea-editor-autosave">{autoSaveStatus}</span>
           </div>
-          <button className="icon" onClick={onClose} title="关闭" type="button">
+          <button className="icon" onClick={closeAfterSaving} title="关闭" type="button">
             <X size={16} />
           </button>
         </header>
 
-        <textarea
+        <MarkdownBodyEditor
           className="idea-editor-body"
           value={draft.body}
-          onChange={(event) =>
+          onChange={(body) =>
             onDraftChange((current) => ({
               ...current,
-              body: event.target.value,
+              body,
             }))
           }
         />
@@ -754,12 +1907,8 @@ function IdeaEditorDialog({
             删除
           </button>
           <div className="idea-editor-save-row">
-            <button className="ghost-button" onClick={onClose} type="button">
+            <button className="ghost-button" onClick={closeAfterSaving} type="button">
               关闭
-            </button>
-            <button className="primary-button" onClick={onSave} type="button">
-              <Check size={16} />
-              保存
             </button>
           </div>
         </footer>
@@ -818,7 +1967,7 @@ function IdeaGrid({
       ))}
       {ideas.length === 0 && (
         <div className="empty-state">
-          <span>还没有灵感卡片。点击快速记录保存第一条 Idea。</span>
+          <span>还没有灵感卡片，先从快速记录开始。</span>
         </div>
       )}
     </div>
@@ -841,7 +1990,7 @@ function SettingsPanel({
       <header className="main-header compact">
         <div>
           <h1>设置</h1>
-          <p>调整灵感文件位置和快速打开快捷键。</p>
+          <p>配置灵感卡片的存储目录和快速记录快捷键。</p>
         </div>
       </header>
 
@@ -862,7 +2011,7 @@ function SettingsPanel({
       </div>
 
       <div className="setting-group">
-        <label htmlFor="shortcut">快速打开快捷键</label>
+        <label htmlFor="shortcut">快速记录快捷键</label>
         <div className="shortcut-row">
           <input
             id="shortcut"
@@ -880,14 +2029,14 @@ function SettingsPanel({
             placeholder="Ctrl+Shift+I"
           />
           <button className="primary-button" onClick={updateShortcut} type="button">
-            应用
+            保存
           </button>
         </div>
       </div>
 
       <div className="setting-note">
-        <p>每张灵感会保存为独立 Markdown 文件，文件头包含标题和更新时间。</p>
-        <p>托盘左键和快捷键会打开快速记录；托盘菜单可以进入主界面。</p>
+        <p>默认情况下，灵感会保存为 Markdown 文件。</p>
+        <p>修改快捷键后请点击保存，使新的快速记录快捷键生效。</p>
       </div>
     </section>
   );
