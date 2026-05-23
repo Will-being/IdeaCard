@@ -1,89 +1,56 @@
-# IdeaCard
+﻿<p align="center">
+  <img src="public/icon.png" alt="IdeaCard" width="96" height="96">
+</p>
 
-[English](./README.md) | [简体中文](./README-zh.md)
+<h1 align="center">IdeaCard</h1>
 
-IdeaCard is a tray-first desktop notebook for capturing short-lived ideas, writing them in Markdown, and keeping them as local files you can search, edit, back up, or sync with your own tools.
+<p align="center">
+  A tray-first desktop notebook for capturing ideas as local Markdown cards.
+</p>
 
-## Why IdeaCard
+<p align="center">
+  English | <a href="./README-zh.md">简体中文</a>
+</p>
 
-IdeaCard is built for the moment when an idea appears before you are ready to open a full notes app. It keeps a small quick-capture card one shortcut away, then gives you a larger library window for cleanup, search, and editing later.
+## What It Is
 
-It is intentionally local-first: every idea is saved as a standalone Markdown file with metadata, not locked inside a database.
+IdeaCard is a lightweight desktop app for moments when an idea arrives before you want to open a full notes app. It gives you a small quick-capture card from the system tray or a global shortcut, then a larger library window for searching, editing, and cleaning up notes later.
+
+It is local-first by design: every card is stored as an individual `.md` file with JSON metadata in front matter, so your notes stay readable outside the app and can be backed up or synced with tools you already use.
 
 ## Features
 
-### Quick capture
+- Tray-first workflow with a quick-capture window and a separate main library window.
+- Default global shortcut: `Ctrl+Shift+I`.
+- Quick capture with editable title, Markdown body, draggable borderless window, and save-on-blur behavior.
+- Keyboard navigation between the blank capture card and saved cards with `Ctrl + ArrowLeft/ArrowRight/ArrowUp/ArrowDown`.
+- Library view sorted by latest update time, with title/body search, refresh, edit, and delete actions.
+- Auto-save while editing a card in the main editor dialog.
+- Configurable storage directory and global shortcut in Settings.
+- Local Markdown files with metadata for `id`, `title`, `created_at`, and `updated_at`.
 
-- Open the quick-capture card from the tray icon or the global shortcut.
-- Default shortcut: `Ctrl+Shift+I`.
-- Edit a title and rich Markdown body in a compact floating card.
-- Drag the quick card without losing your draft.
-- Auto-save only when the quick card truly loses focus.
-- Use `Ctrl + ArrowLeft/ArrowRight/ArrowUp/ArrowDown` to move between a new blank card and existing saved cards.
-- See the current card position and last update time in the quick card footer.
+## Markdown Support
 
-### Main library
-
-- Open the main window from the tray menu or the quick-capture button.
-- Browse all saved idea cards, sorted by latest update.
-- Search by title or body text.
-- Open a card in an editor dialog.
-- Auto-save edits while working in the main editor.
-- Delete cards from the library.
-- Refresh the library from disk.
-
-### Markdown editor
-
-The editor supports a practical subset of Markdown and provides an insert menu for common blocks.
+The editor supports a focused Markdown subset for everyday idea notes:
 
 - Paragraphs and headings.
 - Bold, italic, inline code, Markdown links, and bare `http`, `https`, or `www` URLs.
 - `Ctrl + click` on a rendered link opens it in the system browser.
-- Ordered and unordered lists.
-- Task lists with clickable checkboxes.
-- Completed task items are shown with a strikethrough.
-- Empty list items keep their marker until you press delete/backspace again.
-- Block quotes.
-- Code blocks.
-- Horizontal dividers.
-- Tables.
+- Ordered lists, unordered lists, and task lists with clickable checkboxes.
+- Block quotes, code blocks, horizontal dividers, and tables.
 - Comment callouts saved as `> [!comment]`.
-- `@` opens the insert menu for comment, table, quote, code, task list, unordered list, ordered list, and divider blocks.
+- `@` insert menu for comment, table, quote, code, task list, unordered list, ordered list, and divider blocks.
 - Block toolbar for deleting supported block-level content.
-- Long notes scroll normally in both quick capture and the main editor.
+- Normal scrolling for long notes in both quick capture and the main editor.
 
-### Local files and settings
+## Storage
 
-- Each idea is saved as an individual `.md` file.
-- Files include JSON metadata for `id`, `title`, `created_at`, and `updated_at` in front matter.
-- Choose the storage directory from Settings.
-- Settings are stored in the system application config directory.
-- On first launch, IdeaCard tries `IdeaCenter` next to the executable.
+- On first launch, IdeaCard tries to create `IdeaCenter` next to the executable.
 - If that location is not writable, it falls back to `.IdeaCard/IdeaCenter` in the user's home directory.
-- The global shortcut can be changed in Settings.
+- Settings are stored in the system application config directory.
+- You can choose another storage directory from Settings.
 
-## Stored file format
-
-IdeaCard writes cards like this:
-
-```md
----
-{
-  "id": "Example-202605222133",
-  "title": "Example",
-  "created_at": "1779466380000",
-  "updated_at": "1779466380000"
-}
----
-# Your note
-
-- [ ] A task
-- [x] A completed task
-```
-
-The body remains ordinary Markdown, so it can be edited with other tools.
-
-## Quick start
+## Quick Start
 
 ### Prerequisites
 
@@ -91,13 +58,13 @@ The body remains ordinary Markdown, so it can be edited with other tools.
 - Rust
 - Tauri 2 system dependencies for your operating system
 
-### Install dependencies
+### Install Dependencies
 
 ```bash
 npm install
 ```
 
-### Run in development
+### Run In Development
 
 Frontend dev server only:
 
@@ -125,40 +92,20 @@ Build the desktop package:
 npm run tauri:build
 ```
 
-## Tech stack
+## Tech Stack
 
 - Tauri 2 for the desktop shell, tray menu, native windows, file access, packaging, and global shortcut integration.
 - React 18 and TypeScript for the interface.
 - Vite for development and frontend builds.
 - Rust for storage, settings, tray behavior, and native commands.
-- lucide-react for icons.
+- lucide-react for UI icons.
 
-## Project structure
 
-```text
-.
-|-- src/
-|   |-- App.tsx
-|   |-- main.tsx
-|   `-- styles.css
-|-- src-tauri/
-|   |-- src/
-|   |   |-- lib.rs
-|   |   `-- main.rs
-|   |-- Cargo.toml
-|   `-- tauri.conf.json
-|-- public/
-|-- package.json
-|-- vite.config.ts
-`-- README.md
-```
+## Current Limitations
 
-## Current limitations
-
-- No built-in cloud sync. Use your own sync folder if you want cross-device storage.
-- No published release packages in this repository yet; build locally with `npm run tauri:build`.
+- No built-in cloud sync; use a sync folder if you want cross-device storage.
 - The shortcut parser supports common modifier-plus-letter or modifier-plus-digit shortcuts.
-- The Markdown editor intentionally supports a focused subset of Markdown rather than every Markdown extension.
+- The Markdown editor intentionally supports a practical subset of Markdown, not every Markdown extension.
 
 ## Contributing
 
