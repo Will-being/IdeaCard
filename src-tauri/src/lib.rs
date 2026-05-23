@@ -30,6 +30,13 @@ struct SaveIdeaPayload {
     ended_at: Option<String>,
 }
 
+#[derive(Debug, Serialize)]
+struct StorageMigrationResult {
+    settings: AppSettings,
+    moved_count: usize,
+    old_dir_removed: bool,
+}
+
 const DEFAULT_SHORTCUT: &str = "Ctrl+Shift+I";
 const DEFAULT_STORAGE_DIR_NAME: &str = "IdeaCenter";
 const FALLBACK_STORAGE_PARENT_DIR_NAME: &str = ".IdeaCard";
@@ -177,6 +184,90 @@ fn save_settings_inner(app: &AppHandle, settings: &AppSettings) -> Result<(), St
     let serialized = serde_json::to_string_pretty(settings)
         .map_err(|error| format!("无法序列化设置: {error}"))?;
     fs::write(settings_path(app)?, serialized).map_err(|error| format!("无法写入设置: {error}"))
+}
+
+fn canonical_or_original(path: &Path) -> PathBuf {
+    path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
+}
+
+fn move_markdown_files(old_dir: &Path, new_dir: &Path) -> Result<usize, String> {
+    if !old_dir.exists() {
+        return Ok(0);
+    }
+
+    fs::create_dir_all(new_dir).map_err(|error| format!("无法创建新灵感目录: {error}"))?;
+
+    let markdown_files = fs::read_dir(old_dir)
+        .map_err(|error| format!("无法读取旧灵感目录: {error}"))?
+        .map(|entry| {
+            entry
+                .map(|entry| entry.path())
+                .map_err(|error| format!("无法读取旧灵感目录中的文件: {error}"))
+        })
+        .collect::<Result<Vec<_>, _>>()?
+        .into_iter()
+        .filter(|path| {
+            path.is_file() && path.extension().and_then(|ext| ext.to_str()) == Some("md")
+        })
+        .collect::<Vec<_>>();
+
+    for path in &markdown_files {
+        let file_name = path
+            .file_name()
+            .ok_or_else(|| format!("无法识别 Markdown 文件名: {}", path.display()))?;
+        let destination = new_dir.join(file_name);
+        if destination.exists() {
+            return Err(format!(
+                "新目录中已存在同名 Markdown 文件，已停止迁移: {}",
+                destination.display()
+            ));
+        }
+    }
+
+    let mut moved_count = 0;
+    for path in markdown_files {
+        let file_name = path
+            .file_name()
+            .ok_or_else(|| format!("无法识别 Markdown 文件名: {}", path.display()))?;
+        let destination = new_dir.join(file_name);
+
+        match fs::rename(&path, &destination) {
+            Ok(()) => {}
+            Err(rename_error) => {
+                fs::copy(&path, &destination).map_err(|copy_error| {
+                    format!(
+                        "无法迁移 Markdown 文件 {}: rename 错误: {}; copy 错误: {}",
+                        path.display(),
+                        rename_error,
+                        copy_error
+                    )
+                })?;
+                fs::remove_file(&path).map_err(|error| {
+                    format!(
+                        "已复制但无法删除旧 Markdown 文件 {}: {error}",
+                        path.display()
+                    )
+                })?;
+            }
+        }
+        moved_count += 1;
+    }
+
+    Ok(moved_count)
+}
+
+fn remove_dir_if_empty(dir: &Path) -> Result<bool, String> {
+    if !dir.exists() {
+        return Ok(false);
+    }
+
+    let mut entries = fs::read_dir(dir).map_err(|error| format!("无法检查旧灵感目录: {error}"))?;
+    if entries.next().is_some() {
+        return Ok(false);
+    }
+
+    fs::remove_dir(dir).map_err(|error| format!("无法删除旧灵感目录: {error}"))?;
+    Ok(true)
 }
 
 fn idea_path(settings: &AppSettings, id: &str) -> PathBuf {
@@ -408,6 +499,36 @@ fn update_settings(app: AppHandle, settings: AppSettings) -> Result<AppSettings,
 }
 
 #[tauri::command]
+fn change_storage_dir(
+    app: AppHandle,
+    settings: AppSettings,
+    migrate_markdown: bool,
+) -> Result<StorageMigrationResult, String> {
+    let previous_settings = load_settings_inner(&app)?;
+    let old_dir = PathBuf::from(&previous_settings.storage_dir);
+    let new_dir = PathBuf::from(&settings.storage_dir);
+    let same_dir = canonical_or_original(&old_dir) == canonical_or_original(&new_dir);
+
+    let (moved_count, old_dir_removed) = if migrate_markdown && !same_dir {
+        let moved_count = move_markdown_files(&old_dir, &new_dir)?;
+        let old_dir_removed = remove_dir_if_empty(&old_dir)?;
+        (moved_count, old_dir_removed)
+    } else {
+        fs::create_dir_all(&settings.storage_dir)
+            .map_err(|error| format!("无法创建灵感目录: {error}"))?;
+        (0, false)
+    };
+
+    save_settings_inner(&app, &settings)?;
+    register_quick_open_shortcut(&app, &settings.quick_open_shortcut)?;
+    Ok(StorageMigrationResult {
+        settings,
+        moved_count,
+        old_dir_removed,
+    })
+}
+
+#[tauri::command]
 fn list_ideas(app: AppHandle) -> Result<Vec<IdeaCard>, String> {
     let settings = load_settings_inner(&app)?;
     fs::create_dir_all(&settings.storage_dir)
@@ -501,9 +622,7 @@ fn open_url(_app: AppHandle, url: String) -> Result<(), String> {
         return Err("Only http and https URLs are allowed".to_string());
     }
     #[cfg(target_os = "windows")]
-    let result = std::process::Command::new("explorer")
-        .arg(trimmed)
-        .spawn();
+    let result = std::process::Command::new("explorer").arg(trimmed).spawn();
 
     #[cfg(target_os = "macos")]
     let result = std::process::Command::new("open").arg(trimmed).spawn();
@@ -538,6 +657,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             load_settings,
             update_settings,
+            change_storage_dir,
             list_ideas,
             save_idea,
             delete_idea,

@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { open } from "@tauri-apps/plugin-dialog";
+import { confirm as confirmDialog, open } from "@tauri-apps/plugin-dialog";
 import {
   Code2,
   Eraser,
@@ -33,6 +33,12 @@ import type {
 type AppSettings = {
   storage_dir: string;
   quick_open_shortcut: string;
+};
+
+type StorageMigrationResult = {
+  settings: AppSettings;
+  moved_count: number;
+  old_dir_removed: boolean;
 };
 
 type IdeaCard = {
@@ -1398,19 +1404,43 @@ function App() {
   };
 
   const chooseFolder = async () => {
-    const selected = await open({
-      directory: true,
-      multiple: false,
-      title: "选择灵感卡片存储目录",
-    });
-    if (typeof selected === "string" && settings) {
-      const next = { ...settings, storage_dir: selected };
-      const saved = await invoke<AppSettings>("update_settings", {
-        settings: next,
+    try {
+      const selected = await open({
+        directory: true,
+        multiple: false,
+        title: "选择灵感卡片存储目录",
       });
-      setSettings(saved);
+      if (typeof selected !== "string" || !settings) return;
+
+      if (selected === settings.storage_dir) {
+        setStatus("已选择当前存储目录");
+        return;
+      }
+
+      const migrateMarkdown = await confirmDialog(
+        "是否将原目录下的 Markdown 文件转移到新目录，并删除原目录？",
+        {
+          title: "迁移 Markdown 文件",
+          kind: "warning",
+        },
+      );
+      const next = { ...settings, storage_dir: selected };
+      const result = await invoke<StorageMigrationResult>("change_storage_dir", {
+        settings: next,
+        migrateMarkdown,
+      });
+
+      setSettings(result.settings);
       await load();
-      setStatus("存储目录已更新");
+      if (!migrateMarkdown) {
+        setStatus("存储目录已更新");
+      } else if (result.old_dir_removed) {
+        setStatus(`已迁移 ${result.moved_count} 个 Markdown 文件并删除旧目录`);
+      } else {
+        setStatus(`已迁移 ${result.moved_count} 个 Markdown 文件；旧目录仍包含其他内容，未删除`);
+      }
+    } catch (error) {
+      setStatus(String(error));
     }
   };
 
