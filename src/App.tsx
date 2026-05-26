@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { emit } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { confirm as confirmDialog, open } from "@tauri-apps/plugin-dialog";
 import {
@@ -1765,6 +1766,11 @@ function QuickCapture({
 
   useEffect(() => {
     const appWindow = getCurrentWindow();
+    const cleanupSettings = cleanupSubscription(
+      appWindow.listen<AppSettings>("settings-updated", ({ payload }) => {
+        settingsRef.current = payload;
+      }),
+    );
     const cleanupOpened = cleanupSubscription(
       appWindow.listen<QuickWindowOpenedPayload>("quick-window-opened", ({ payload }) => {
         if (payload.source === "shortcut") {
@@ -1791,6 +1797,7 @@ function QuickCapture({
     );
 
     return () => {
+      cleanupSettings();
       cleanupOpened();
       cleanupFocus();
     };
@@ -2141,6 +2148,7 @@ function SettingsPanel({
                   : null;
                 if (nextSettings) {
                   setSettings(nextSettings);
+                  void emit("settings-updated", nextSettings);
                   void saveSettings(nextSettings);
                 }
               }}

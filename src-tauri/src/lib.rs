@@ -400,6 +400,10 @@ fn emit_quick_window_opened(app: &AppHandle, source: &str) {
     );
 }
 
+fn emit_settings_updated(app: &AppHandle, settings: &AppSettings) {
+    let _ = app.emit("settings-updated", settings.clone());
+}
+
 fn open_quick_window_with_source(app: &AppHandle, source: &str) {
     if let Some(window) = app.get_webview_window("quick") {
         let _ = show_window(&window);
@@ -532,6 +536,7 @@ fn load_settings(app: AppHandle) -> Result<AppSettings, String> {
 fn update_settings(app: AppHandle, settings: AppSettings) -> Result<AppSettings, String> {
     save_settings_inner(&app, &settings)?;
     register_quick_open_shortcut(&app, &settings.quick_open_shortcut)?;
+    emit_settings_updated(&app, &settings);
     Ok(settings)
 }
 
@@ -558,6 +563,7 @@ fn change_storage_dir(
 
     save_settings_inner(&app, &settings)?;
     register_quick_open_shortcut(&app, &settings.quick_open_shortcut)?;
+    emit_settings_updated(&app, &settings);
     Ok(StorageMigrationResult {
         settings,
         moved_count,

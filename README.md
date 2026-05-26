@@ -23,11 +23,18 @@ It is local-first by design: every card is stored as an individual `.md` file wi
 - Tray-first workflow with a quick-capture window and a separate main library window.
 - Default global shortcut: `Ctrl+Shift+I`.
 - Quick capture with editable title, Markdown body, draggable borderless window, and save-on-blur behavior.
+- Optional clipboard auto-read when opening quick capture with the global shortcut; the setting takes effect immediately after toggling it.
 - Keyboard navigation between the blank capture card and saved cards with `Ctrl + ArrowLeft/ArrowRight/ArrowUp/ArrowDown`.
 - Library view sorted by latest update time, with title/body search, refresh, edit, and delete actions.
 - Auto-save while editing a card in the main editor dialog.
 - Configurable storage directory and global shortcut in Settings.
 - Local Markdown files with metadata for `id`, `title`, `created_at`, and `updated_at`.
+
+## Clipboard Capture
+
+Clipboard capture is opt-in. Enable **Read clipboard when opened by shortcut** in Settings, then open the quick-capture window with the configured global shortcut. If the draft is empty and the clipboard contains text, IdeaCard fills the body with that text.
+
+The switch is synchronized across the main and quick-capture windows immediately, so you do not need to restart the app or wait for the next focus refresh after changing it.
 
 ## Markdown Support
 
