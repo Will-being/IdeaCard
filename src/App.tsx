@@ -33,6 +33,11 @@ import type {
 type AppSettings = {
   storage_dir: string;
   quick_open_shortcut: string;
+  auto_read_clipboard: boolean;
+};
+
+type QuickWindowOpenedPayload = {
+  source: "shortcut" | "manual" | string;
 };
 
 type StorageMigrationResult = {
@@ -171,6 +176,12 @@ const getPreview = (body: string) => {
 };
 
 const hasDraftContent = (draft: Draft) => Boolean(draft.title.trim() || draft.body.trim());
+
+const normalizeClipboardText = (value: string) =>
+  value
+    .replace(/\r\n/g, "\n")
+    .replace(/\r/g, "\n")
+    .trim();
 
 const stripEndTimeSuffix = (title: string) => title.replace(/-\d{8}-\d{6}$/, "");
 
@@ -1444,14 +1455,15 @@ function App() {
     }
   };
 
-  const updateShortcut = async () => {
-    if (!settings) return;
+  const saveSettings = async (overrideSettings?: AppSettings) => {
+    const target = overrideSettings ?? settings;
+    if (!target) return;
     try {
       const saved = await invoke<AppSettings>("update_settings", {
-        settings,
+        settings: target,
       });
       setSettings(saved);
-      setStatus("快捷键已更新");
+      setStatus("设置已更新");
     } catch (error) {
       setStatus(String(error));
     }
@@ -1464,6 +1476,7 @@ function App() {
         ideas={ideas}
         reloadIdeas={load}
         saveDraft={saveDraft}
+        settings={settings}
         setDraft={setDraft}
       />
     );
@@ -1556,7 +1569,7 @@ function App() {
             settings={settings}
             setSettings={setSettings}
             chooseFolder={chooseFolder}
-            updateShortcut={updateShortcut}
+            saveSettings={saveSettings}
           />
         )}
       </section>
@@ -1570,12 +1583,14 @@ function QuickCapture({
   reloadIdeas,
   setDraft,
   saveDraft,
+  settings,
 }: {
   draft: Draft;
   ideas: IdeaCard[];
   reloadIdeas: () => Promise<IdeaCard[]>;
   setDraft: Dispatch<SetStateAction<Draft>>;
   saveDraft: (candidate: Draft) => Promise<IdeaCard | null>;
+  settings: AppSettings | null;
 }) {
   const [closing, setClosing] = useState(false);
   const [activeIdeaId, setActiveIdeaId] = useState<string | null>(null);
@@ -1589,6 +1604,7 @@ function QuickCapture({
   const navigatingRef = useRef(false);
   const reloadIdeasRef = useRef(reloadIdeas);
   const saveDraftRef = useRef(saveDraft);
+  const settingsRef = useRef(settings);
 
   useEffect(() => {
     draftRef.current = draft;
@@ -1609,6 +1625,10 @@ function QuickCapture({
   useEffect(() => {
     saveDraftRef.current = saveDraft;
   }, [saveDraft]);
+
+  useEffect(() => {
+    settingsRef.current = settings;
+  }, [settings]);
 
   useEffect(() => {
     titleInputRef.current?.focus();
@@ -1716,8 +1736,34 @@ function QuickCapture({
     [keepDragGuardForNativeMove],
   );
 
+  const readClipboardTextIntoEmptyDraft = useCallback(async () => {
+    const settings = settingsRef.current ?? await invoke<AppSettings>("load_settings");
+    if (!settings?.auto_read_clipboard || hasDraftContent(draftRef.current)) return;
+    if (!navigator.clipboard?.readText) return;
+
+    try {
+      const text = normalizeClipboardText(await navigator.clipboard.readText());
+      if (!text || hasDraftContent(draftRef.current)) return;
+      setDraft((current) => {
+        if (hasDraftContent(current)) return current;
+        const next = { ...current, body: text };
+        draftRef.current = next;
+        return next;
+      });
+    } catch {
+      // Clipboard access may be denied by the OS or unavailable for non-text content.
+    }
+  }, [setDraft]);
+
   useEffect(() => {
     const appWindow = getCurrentWindow();
+    const cleanupOpened = cleanupSubscription(
+      appWindow.listen<QuickWindowOpenedPayload>("quick-window-opened", ({ payload }) => {
+        if (payload.source === "shortcut") {
+          void readClipboardTextIntoEmptyDraft();
+        }
+      }),
+    );
     const cleanupFocus = cleanupSubscription(
       appWindow.onFocusChanged(({ payload: focused }) => {
         if (focused) {
@@ -1732,9 +1778,10 @@ function QuickCapture({
     );
 
     return () => {
+      cleanupOpened();
       cleanupFocus();
     };
-  }, [resetToNewDraft, submitAndHide]);
+  }, [readClipboardTextIntoEmptyDraft, resetToNewDraft, submitAndHide]);
 
   const currentPosition = activeIdeaId
     ? ideas.findIndex((idea) => idea.id === activeIdeaId) + 1
@@ -2008,12 +2055,12 @@ function SettingsPanel({
   settings,
   setSettings,
   chooseFolder,
-  updateShortcut,
+  saveSettings,
 }: {
   settings: AppSettings | null;
   setSettings: Dispatch<SetStateAction<AppSettings | null>>;
   chooseFolder: () => void;
-  updateShortcut: () => void;
+  saveSettings: (overrideSettings?: AppSettings) => Promise<void>;
 }) {
   return (
     <section className="settings-panel main-settings" aria-label="设置">
@@ -2058,15 +2105,42 @@ function SettingsPanel({
             }
             placeholder="Ctrl+Shift+I"
           />
-          <button className="primary-button" onClick={updateShortcut} type="button">
+          <button className="primary-button" onClick={() => void saveSettings()} type="button">
             保存
           </button>
         </div>
       </div>
 
+      <div className="setting-group">
+        <div className="setting-toggle-row">
+          <div>
+            <span className="setting-label">快捷键打开时读取剪贴板</span>
+            <p>开启后，仅在使用快速记录快捷键打开面板时读取剪贴板中的最新文字。</p>
+          </div>
+          <label className="switch" title="自动读取剪贴板文字">
+            <input
+              aria-label="快捷键打开时自动读取剪贴板文字"
+              checked={settings?.auto_read_clipboard ?? false}
+              disabled={!settings}
+              onChange={(event) => {
+                const nextSettings = settings
+                  ? { ...settings, auto_read_clipboard: event.target.checked }
+                  : null;
+                if (nextSettings) {
+                  setSettings(nextSettings);
+                  void saveSettings(nextSettings);
+                }
+              }}
+              type="checkbox"
+            />
+            <span />
+          </label>
+        </div>
+      </div>
+
       <div className="setting-note">
         <p>默认情况下，灵感会保存为 Markdown 文件。</p>
-        <p>修改快捷键后请点击保存，使新的快速记录快捷键生效。</p>
+        <p>修改快捷键后请点击保存；剪贴板开关会即时生效。</p>
       </div>
     </section>
   );

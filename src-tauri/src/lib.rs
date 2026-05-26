@@ -4,13 +4,20 @@ use std::path::{Path, PathBuf};
 use tauri::image::Image;
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
-use tauri::{AppHandle, Emitter, Manager, WebviewWindow};
+use tauri::{AppHandle, Emitter, Manager, WebviewWindow, WebviewWindowBuilder};
 use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 struct AppSettings {
     storage_dir: String,
     quick_open_shortcut: String,
+    #[serde(default)]
+    auto_read_clipboard: bool,
+}
+
+#[derive(Debug, Serialize, Clone)]
+struct QuickWindowOpenedPayload {
+    source: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -173,6 +180,7 @@ fn load_settings_inner(app: &AppHandle) -> Result<AppSettings, String> {
     let settings = AppSettings {
         storage_dir: default_storage_dir(app)?.to_string_lossy().to_string(),
         quick_open_shortcut: DEFAULT_SHORTCUT.to_string(),
+        auto_read_clipboard: false,
     };
     save_settings_inner(app, &settings)?;
     Ok(settings)
@@ -376,8 +384,37 @@ fn open_window(app: &AppHandle, label: &str) {
         let _ = show_window(&window);
         if label == "main" {
             let _ = app.emit_to("main", "main-window-opened", ());
+        } else if label == "quick" {
+            emit_quick_window_opened(app, "manual");
         }
     }
+}
+
+fn emit_quick_window_opened(app: &AppHandle, source: &str) {
+    let _ = app.emit_to(
+        "quick",
+        "quick-window-opened",
+        QuickWindowOpenedPayload {
+            source: source.to_string(),
+        },
+    );
+}
+
+fn open_quick_window_with_source(app: &AppHandle, source: &str) {
+    if let Some(window) = app.get_webview_window("quick") {
+        let _ = show_window(&window);
+        emit_quick_window_opened(app, source);
+    }
+}
+
+fn create_configured_windows(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
+    let windows = app.config().app.windows.clone();
+    for window_config in windows {
+        WebviewWindowBuilder::from_config(app, &window_config)?
+            .enable_clipboard_access()
+            .build()?;
+    }
+    Ok(())
 }
 
 fn tray_icon_image() -> tauri::Result<Image<'static>> {
@@ -448,7 +485,7 @@ fn register_quick_open_shortcut(app: &AppHandle, shortcut_text: &str) -> Result<
     app.global_shortcut()
         .on_shortcut(shortcut, move |_app, _shortcut, event| {
             if event.state() == ShortcutState::Pressed {
-                open_window(&app_handle, "quick");
+                open_quick_window_with_source(&app_handle, "shortcut");
             }
         })
         .map_err(|error| format!("无法注册快捷键: {error}"))
@@ -648,6 +685,7 @@ pub fn run() {
             }
         })
         .setup(|app| {
+            create_configured_windows(app)?;
             setup_tray(app)?;
             let app_handle = app.handle().clone();
             let settings = load_settings_inner(&app_handle)?;

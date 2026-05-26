@@ -13,6 +13,7 @@
     "windows": [
       {
         "label": "main",
+        "create": false,
         "title": "IdeaCard",
         "url": "index.html?view=main",
         "width": 980,
@@ -27,6 +28,7 @@
       },
       {
         "label": "quick",
+        "create": false,
         "title": "Quick Capture",
         "url": "index.html?view=quick",
         "width": 480,
