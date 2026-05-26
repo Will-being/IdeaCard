@@ -1737,8 +1737,16 @@ function QuickCapture({
   );
 
   const readClipboardTextIntoEmptyDraft = useCallback(async () => {
-    const settings = settingsRef.current ?? await invoke<AppSettings>("load_settings");
-    if (!settings?.auto_read_clipboard || hasDraftContent(draftRef.current)) return;
+    let settings = settingsRef.current;
+    if (!settings) {
+      try {
+        settings = await invoke<AppSettings>("load_settings");
+        settingsRef.current = settings;
+      } catch {
+        return;
+      }
+    }
+    if (!settings.auto_read_clipboard || hasDraftContent(draftRef.current)) return;
     if (!navigator.clipboard?.readText) return;
 
     try {
@@ -1769,12 +1777,17 @@ function QuickCapture({
         if (focused) {
           titleInputRef.current?.focus();
           void reloadIdeasRef.current();
+          void invoke<AppSettings>("load_settings").then(
+            (s) => { settingsRef.current = s; },
+            () => void 0,
+          );
         } else if (dragGuardRef.current) {
           return;
         } else {
           submitAndHide();
         }
       }),
+      () => void 0,
     );
 
     return () => {
